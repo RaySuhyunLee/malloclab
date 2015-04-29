@@ -6,6 +6,10 @@ M1522.000800 System Programmig                                      Spring 2015
 
 based on the CS:APP Malloc Lab (c) by R.Bryant and D.O'Hallaron.
 
+sudo apt-get install libc6-dev-i386
+sudo ln -s /usr/include/asm-generic/ /usr/include/asm
+sudo apt-get install gcc-multilib
+
 
 Directions to Students
 ----------------------
