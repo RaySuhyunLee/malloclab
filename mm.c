@@ -47,6 +47,11 @@ static range_t **gl_ranges;
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
+#define IS_ALLOCATED(header) ((header)&0x1)
+#define GET_SIZE(header) ((header) & ~0x7)
+
+//#define DEBUG
+
 /* 
  * remove_range - manipulate range lists
  * DON'T MODIFY THIS FUNCTION AND LEAVE IT AS IT WAS
@@ -83,17 +88,47 @@ int mm_init(range_t **ranges)
 }
 
 /*
- * mm_malloc - Allocate a block by incrementing the brk pointer.
+ * mm_malloc - Allocate a block by searching for a free block or incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
  */
 void* mm_malloc(size_t size)
 {
   int newsize = ALIGN(size + SIZE_T_SIZE);
-  void *p = mem_sbrk(newsize);
+	void* p = mem_heap_lo();
+	size_t header;
+	size_t oldsize;
+	int diff;
+	if (mem_heap_hi() - mem_heap_lo() + 1 >= newsize) {
+		while(p < mem_heap_hi()) {
+			header = *(size_t*)p;
+			if (IS_ALLOCATED(header))
+				p += GET_SIZE(header);
+			else if ((oldsize = GET_SIZE(header)) >= newsize) {
+				*(size_t*)p = newsize + 0x1;
+				// split blocks
+				if ((diff = oldsize - newsize) > 0) {
+					*(size_t*)(p+newsize) = diff;
+				}
+#ifdef DEBUG
+				printf("%d bytes allocated with p: %p\n", GET_SIZE(*(size_t*)p), p);
+#endif
+				return p + SIZE_T_SIZE;
+			}
+			else
+				p += GET_SIZE(header);
+		}
+	}
+
+	// if there isn't enough space
+  p = mem_sbrk(newsize);
+
   if (p == (void *)-1)
     return NULL;
   else {
-    *(size_t *)p = size;
+    *(size_t *)p = newsize + 0x1;
+#ifdef DEBUG
+		printf("%d bytes allocated with sbrk with p: %p\n", GET_SIZE(*(size_t*)p), p);
+#endif
     return (void *)((char *)p + SIZE_T_SIZE);
   }
 }
@@ -103,7 +138,20 @@ void* mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
+	void *header_ptr = ptr - SIZE_T_SIZE;
   /* YOUR IMPLEMENTATION */
+	size_t header = *(size_t*)header_ptr;
+	if (IS_ALLOCATED(header))
+		*(size_t*)header_ptr -= 0x1;
+	else {
+#ifdef DEBUG
+		printf("already freed\n");
+#endif
+		return;
+	}
+#ifdef DEBUG
+	printf("%d bytes freed with ptr: %p\n", GET_SIZE(*(size_t*)header_ptr), header_ptr);
+#endif
 
   /* DON't MODIFY THIS STAGE AND LEAVE IT AS IT WAS */
   if (gl_ranges)
@@ -123,8 +171,11 @@ void* mm_realloc(void *ptr, size_t t)
  */
 void mm_exit(void)
 {
-	void* i;
-	for(i=mem_heap_lo(); i<=mem_heap_hi(); i++)
-		mm_free(i);
+#ifdef DEBUG
+	printf("exit\n");
+#endif
+	void* p;
+	for(p=mem_heap_lo(); p<=mem_heap_hi(); p+=GET_SIZE(*(size_t*)p))
+		mm_free(p+SIZE_T_SIZE);
 }
 
