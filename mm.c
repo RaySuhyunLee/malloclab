@@ -24,11 +24,11 @@
  ********************************************************/
 team_t team = {
   /* Team name : Your student ID */
-  "2015-00000",
+  "2013-11419",
   /* Your full name */
-  "FirstName LastName",
+  "Suhyun Lee",
   /* Your student ID */
-  "2015-00000",
+  "2013-11419",
   /* leave blank */
   "",
   /* leave blank */
@@ -76,7 +76,6 @@ int mm_init(range_t **ranges)
 {
   /* YOUR IMPLEMENTATION */
 
-
   /* DON't MODIFY THIS STAGE AND LEAVE IT AS IT WAS */
   gl_ranges = ranges;
 
@@ -106,7 +105,6 @@ void mm_free(void *ptr)
 {
   /* YOUR IMPLEMENTATION */
 
-
   /* DON't MODIFY THIS STAGE AND LEAVE IT AS IT WAS */
   if (gl_ranges)
     remove_range(gl_ranges, ptr);
@@ -125,5 +123,8 @@ void* mm_realloc(void *ptr, size_t t)
  */
 void mm_exit(void)
 {
+	void* i;
+	for(i=mem_heap_lo(); i<=mem_heap_hi(); i++)
+		mm_free(i);
 }
 
