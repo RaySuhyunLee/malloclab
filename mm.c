@@ -169,10 +169,7 @@ void* mm_malloc(size_t size)
 					NEXT(split) = next;
 					PREV(split) = prev;
 				} else {
-					if (prev == NULL) free_first = next;	// if this is the first free block
-					else							NEXT(prev) = next;
-					if (next == NULL) free_last = prev;		// if this is the last free block
-					else							PREV(next) = prev;
+					DETACH(p)
 				}
 #ifdef DEBUG
 				printf("after: free_first: %p | free_last: %p | prev: %p | next: %p\n", free_first, free_last, prev, next);
@@ -195,6 +192,7 @@ void* mm_malloc(size_t size)
 	else {
 		GET_HEADER(p) = newsize + 0x1;
 		GET_HEADER(p + newsize - SIZE_T_SIZE) = newsize + 0x1;
+
 #ifdef DEBUG
 		printf("req: %d | actual: %d bytes allocated with sbrk with p: %p\n\n", size, GET_SIZE(GET_HEADER(p)), p);
 #endif
