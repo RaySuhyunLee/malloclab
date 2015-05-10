@@ -152,11 +152,18 @@ void mm_free(void *ptr)
 {
 	void *header_ptr = ptr - SIZE_T_SIZE;
 	size_t header = *(size_t*)header_ptr;
+	void *next_ptr = header_ptr + GET_SIZE(header);
+	size_t header_next = *(size_t*)next_ptr;
 	if (IS_ALLOCATED(header)) {
-		*(size_t*)header_ptr -= 0x1;
+		// check if coalescing is available
+		if (next_ptr > mem_heap_hi() || IS_ALLOCATED(header_next)) {
+			*(size_t*)header_ptr -= 0x1;
+		} else {
+			*(size_t*)header_ptr = GET_SIZE(header) + GET_SIZE(header_next);
+		}
 		cursor = header_ptr;
 #ifdef DEBUG
-	printf("%d bytes freed with ptr: %p\n", GET_SIZE(*(size_t*)header_ptr), header_ptr);
+		printf("%d bytes freed with ptr: %p\n", GET_SIZE(*(size_t*)header_ptr), header_ptr);
 #endif
 	}
 	else {
