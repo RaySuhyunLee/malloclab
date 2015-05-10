@@ -152,17 +152,19 @@ void mm_free(void *ptr)
 {
 	void *header_ptr = ptr - SIZE_T_SIZE;
 	size_t header = *(size_t*)header_ptr;
-	if (IS_ALLOCATED(header))
+	if (IS_ALLOCATED(header)) {
 		*(size_t*)header_ptr -= 0x1;
+		cursor = header_ptr;
+#ifdef DEBUG
+	printf("%d bytes freed with ptr: %p\n", GET_SIZE(*(size_t*)header_ptr), header_ptr);
+#endif
+	}
 	else {
 #ifdef DEBUG
 		printf("already freed at ptr: %p\n", header_ptr);
 #endif
 		return;
 	}
-#ifdef DEBUG
-	printf("%d bytes freed with ptr: %p\n", GET_SIZE(*(size_t*)header_ptr), header_ptr);
-#endif
 
   /* DON't MODIFY THIS STAGE AND LEAVE IT AS IT WAS */
   if (gl_ranges)
