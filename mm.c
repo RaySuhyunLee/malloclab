@@ -68,12 +68,16 @@ static void* free_last;
 #define NEXT(ptr) (*(void**)((ptr) + NEXT_OFFSET))
 #define IS_ALLOCATED(header) ((header)&0x1)
 #define GET_SIZE(header) ((header) & ~0x7)
-#define DETACH(ptr) \
-	if (PREV(ptr) == NULL) free_first = NEXT(ptr);	/* if this is the first free block */ \
-	else							NEXT(PREV(ptr)) = NEXT(ptr); \
-	if (NEXT(ptr) == NULL) free_last = PREV(ptr);		/* if this is the last free block */ \
-	else							PREV(NEXT(ptr)) = PREV(ptr);
 
+/* for segregated list */
+#define DETACH(ptr, index) \
+	if (PREV(ptr) == NULL) GET_FIRST(index) = NEXT(ptr);	/* if this is the first free block */ \
+	else							NEXT(PREV(ptr)) = NEXT(ptr); \
+	if (NEXT(ptr) == NULL) GET_LAST(index) = PREV(ptr);		/* if this is the last free block */ \
+	else							PREV(NEXT(ptr)) = PREV(ptr);
+#define SEGLIST_NUM 14
+#define GET_FIRST(index) (*(void**)(mem_heap_lo() + (index)))
+#define GET_LAST(index) (*(void**)(mem_heap_lo() + SEGLIST_NUM + (index)))
 
 //#define DEBUG
 
@@ -105,8 +109,15 @@ static void remove_range(range_t **ranges, char *lo)
 int mm_init(range_t **ranges)
 {
   /* YOUR IMPLEMENTATION */
-	free_first = NULL;
-	free_last = NULL;
+	void* p;	
+	p = mem_sbrk(SEGLIST_NUM<<1);
+
+	if (p == (void *)-1)
+		return 0;
+	else {
+		for (; p<=mem_heap_hi(); p++)
+			*(void**)p = NULL;
+	}
 
   /* DON't MODIFY THIS STAGE AND LEAVE IT AS IT WAS */
   gl_ranges = ranges;
@@ -129,11 +140,18 @@ void* mm_malloc(size_t size)
 	size_t header;
 	size_t headersize;
 	int diff;
+	int i;
+
+	void* first;
+	void* last;
 		
 	/* free list is not empty and heap size is big enough */
 	if (mem_heap_hi() - mem_heap_lo() + 1 >= newsize) {
-		p = free_first;
-
+		for (i=SEGLIST_NUM; i>0; i--)
+			if ((newsize>>i) & 0x1) break;
+		first = GET_FIRST(i-1);
+		last = GET_LAST(i-1);
+		p = first;
 		while(p != NULL) {
 			header = GET_HEADER(p);
 			headersize = GET_SIZE(header);
@@ -158,18 +176,18 @@ void* mm_malloc(size_t size)
 					GET_HEADER(split + diff - SIZE_T_SIZE) = diff;
 				}
 #ifdef DEBUG
-				printf("before: free_first: %p | free_last: %p | prev: %p | next: %p\n", free_first, free_last, prev, next);
+				printf("before: first: %p | last: %p | prev: %p | next: %p\n", first, last, prev, next);
 #endif
 				/* write free pointer */
 				if (diff >= MIN_SIZE) {
-					if (prev == NULL) free_first = split;
+					if (prev == NULL) GET_FIRST(i-1) = split;
 					else							NEXT(prev) = split;
-					if (next == NULL) free_last = split;
+					if (next == NULL) GET_LAST(i-1) = split;
 					else							PREV(next) = split;
 					NEXT(split) = next;
 					PREV(split) = prev;
 				} else {
-					DETACH(p)
+					DETACH(p, i-1)
 				}
 #ifdef DEBUG
 				printf("after: free_first: %p | free_last: %p | prev: %p | next: %p\n", free_first, free_last, prev, next);
@@ -220,11 +238,16 @@ void mm_free(void *ptr)
 	int next_coal;
 	int prev_coal;
 
+	void* first;
+	void* last;
+	int i;
+
 #ifdef DEBUG
 	printf("free called with ptr: %p, header_ptr: %p, header: %d, allocated: %d\n", ptr, header_ptr, header, IS_ALLOCATED(header));
 	printf("before: free_first: %p | free_last: %p\n", free_first, free_last);
 #endif
 	if (IS_ALLOCATED(header)) {
+
 		/* check if coalescing is possible */
 
 		next_coal = next_ptr <= mem_heap_hi() && !IS_ALLOCATED(header_next);
@@ -235,11 +258,15 @@ void mm_free(void *ptr)
 			header_ptr = prev_ptr;
 			
 			/* detach link */
+			for (i=SEGLIST_NUM; i>0; i--)
+				if ((prevsize>>i) & 0x1) break;
 			if (prevsize >= MIN_SIZE) {
-				DETACH(prev_ptr)
+				DETACH(prev_ptr, i-1)
 			}
+			for (i=SEGLIST_NUM; i>0; i--)
+				if ((nextsize>>i) & 0x1) break;
 			if (nextsize >= MIN_SIZE) {
-				DETACH(next_ptr)
+				DETACH(next_ptr, i-1)
 			}
 		}
 		/* if next block is free */
@@ -248,8 +275,10 @@ void mm_free(void *ptr)
 			GET_HEADER(next_ptr + nextsize - SIZE_T_SIZE) = headersize + nextsize;
 			
 			/* detach link */
+			for (i=SEGLIST_NUM; i>0; i--)
+				if ((nextsize>>i) & 0x1) break;
 			if (nextsize >= MIN_SIZE) {
-				DETACH(next_ptr)
+				DETACH(next_ptr, i-1)
 			}
 		}
 		/* if previous block is free */
@@ -259,8 +288,10 @@ void mm_free(void *ptr)
 			header_ptr = prev_ptr;
 
 			/* detach link */
+			for (i=SEGLIST_NUM; i>0; i--)
+				if ((prevsize>>i) & 0x1) break;
 			if (prevsize >= MIN_SIZE) {
-				DETACH(prev_ptr)
+				DETACH(prev_ptr, i-1)
 			}
 		}
 		/* no other blocks are free */
@@ -268,17 +299,21 @@ void mm_free(void *ptr)
 			GET_HEADER(header_ptr) -= 0x1;
 			GET_HEADER(next_ptr - SIZE_T_SIZE) -= 0x1;
 		}
+		for (i=SEGLIST_NUM; i>0; i--)
+			if ((GET_SIZE(GET_HEADER(header_ptr))>>i) & 0x1) break;
+		first = GET_FIRST(i-1);
+		last = GET_LAST(i-1);
 
 		/* write free pointer */
-		if (free_last == NULL) {
-			free_first = header_ptr;
-			free_last = header_ptr;
+		if (last == NULL) {
+			GET_FIRST(i-1) = header_ptr;
+			GET_LAST(i-1) = header_ptr;
 			NEXT(header_ptr) = NULL;
 			PREV(header_ptr) = NULL;
 		} else {
-			PREV(header_ptr) = free_last;
+			PREV(header_ptr) = last;
 			NEXT(header_ptr) = NULL;
-			free_last = header_ptr;
+			GET_LAST(i-1) = header_ptr;
 		}
 #ifdef DEBUG
 		printf("after: free_first: %p | free_last: %p\n", free_first, free_last);
