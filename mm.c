@@ -98,8 +98,9 @@ int mm_init(range_t **ranges)
  */
 void* mm_malloc(size_t size)
 {
-  int newsize = ALIGN(size + SIZE_T_SIZE);
+  int newsize = ALIGN(size) + (SIZE_T_SIZE<<1);
 	void* p;
+	void* next;
 	size_t header;
 	size_t oldsize;
 	int diff;
@@ -115,9 +116,12 @@ void* mm_malloc(size_t size)
 				p += GET_SIZE(header);
 			else if ((oldsize = GET_SIZE(header)) >= newsize) {
 				*(size_t*)p = newsize + 0x1;
+				*(size_t*)(p+newsize - SIZE_T_SIZE) = newsize + 0x1;
 				// split blocks
 				if ((diff = oldsize - newsize) > 0) {
-					*(size_t*)(p+newsize) = diff;
+					next = p + newsize;
+					*(size_t*)next = diff;
+					*(size_t*)(next + diff - SIZE_T_SIZE) = diff;
 				}
 #ifdef DEBUG
 				printf("%d bytes allocated with p: %p\n", GET_SIZE(*(size_t*)p), p);
@@ -137,11 +141,12 @@ void* mm_malloc(size_t size)
     return NULL;
   else {
     *(size_t *)p = newsize + 0x1;
+		*(size_t*)(p + newsize - SIZE_T_SIZE) = newsize + 0x1;
 #ifdef DEBUG
 		printf("%d bytes allocated with sbrk with p: %p\n", GET_SIZE(*(size_t*)p), p);
 #endif
 		cursor = p;
-    return (void *)((char *)p + SIZE_T_SIZE);
+    return p + SIZE_T_SIZE;
   }
 }
 
@@ -154,14 +159,23 @@ void mm_free(void *ptr)
 	size_t header = *(size_t*)header_ptr;
 	void *next_ptr = header_ptr + GET_SIZE(header);
 	size_t header_next = *(size_t*)next_ptr;
+	void *prev_ptr = header_ptr - GET_SIZE(*(size_t*)(header_ptr - SIZE_T_SIZE));
+	size_t header_prev = *(size_t*)prev_ptr;
 	if (IS_ALLOCATED(header)) {
 		// check if coalescing is available
-		if (next_ptr > mem_heap_hi() || IS_ALLOCATED(header_next)) {
-			*(size_t*)header_ptr -= 0x1;
-		} else {
+		if (next_ptr <= mem_heap_hi() && !IS_ALLOCATED(header_next)) {
 			*(size_t*)header_ptr = GET_SIZE(header) + GET_SIZE(header_next);
+			*(size_t*)(next_ptr + GET_SIZE(header_next) - SIZE_T_SIZE) = GET_SIZE(header) + GET_SIZE(header_next);
+			cursor = header_ptr;
+		} else if (prev_ptr >= mem_heap_lo() && !IS_ALLOCATED(header_prev)) {
+			*(size_t*)prev_ptr = GET_SIZE(header) + GET_SIZE(header_prev);
+			*(size_t*)(next_ptr - SIZE_T_SIZE) = GET_SIZE(header) + GET_SIZE(header_prev);
+			cursor = prev_ptr;
+		} else {
+			*(size_t*)header_ptr -= 0x1;
+			*(size_t*)(next_ptr - SIZE_T_SIZE) -= 0x1;
+			cursor = header_ptr;
 		}
-		cursor = header_ptr;
 #ifdef DEBUG
 		printf("%d bytes freed with ptr: %p\n", GET_SIZE(*(size_t*)header_ptr), header_ptr);
 #endif
