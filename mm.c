@@ -49,8 +49,6 @@ static range_t **gl_ranges;
 
 
 /* my implementations */
-static void* free_first;
-static void* free_last;
 
 /* block structure */
 /* ========== */
@@ -70,16 +68,22 @@ static void* free_last;
 #define GET_SIZE(header) ((header) & ~0x7)
 
 /* for segregated list */
+#define SEGLIST_NUM 16
+#define GET_FIRST(index) (*((void**)mem_heap_lo() + (index)))
+#define GET_LAST(index) (*((void**)mem_heap_lo() + SEGLIST_NUM + (index)))
 #define DETACH(ptr, index) \
 	if (PREV(ptr) == NULL) GET_FIRST(index) = NEXT(ptr);	/* if this is the first free block */ \
 	else							NEXT(PREV(ptr)) = NEXT(ptr); \
 	if (NEXT(ptr) == NULL) GET_LAST(index) = PREV(ptr);		/* if this is the last free block */ \
 	else							PREV(NEXT(ptr)) = PREV(ptr);
-#define SEGLIST_NUM 14
-#define GET_FIRST(index) (*(void**)(mem_heap_lo() + (index)))
-#define GET_LAST(index) (*(void**)(mem_heap_lo() + SEGLIST_NUM + (index)))
+#define GET_INDEX(size, var) \
+		for ((var)=0; (var)<SEGLIST_NUM-1; (var)++) \
+			if ((0x1<<(var)) < (size) && (0x1<<((var)+1)) >= (size)) break;
 
-//#define DEBUG
+
+static void* heap_start;
+
+#define DEBUG
 
 /* 
  * remove_range - manipulate range lists
@@ -104,20 +108,40 @@ static void remove_range(range_t **ranges, char *lo)
 }
 
 /*
+ * mm_check
+ */
+void mm_check(void) {
+	void** p;
+	int i=0;
+	for(p=mem_heap_lo(); p<(void**)mem_heap_lo()+ALIGN(SEGLIST_NUM); p++, i++)
+		printf("[%d: %p] ", i, *p);
+	printf("\n");
+	i = 0;
+	for(; p<(void**)mem_heap_lo()+ALIGN(SEGLIST_NUM<<1); p++, i++)
+		printf("[%d: %p] ", i, *p);
+	printf("\n");
+}
+
+/*
  * mm_init - initialize the malloc package.
  */
 int mm_init(range_t **ranges)
 {
   /* YOUR IMPLEMENTATION */
+	/* allocate special memory for seglist */
 	void* p;	
-	p = mem_sbrk(SEGLIST_NUM<<1);
-
+	p = mem_sbrk(ALIGN((SEGLIST_NUM<<1)*sizeof(void**)));
 	if (p == (void *)-1)
 		return 0;
 	else {
+		heap_start = mem_heap_hi() + 1;
 		for (; p<=mem_heap_hi(); p++)
 			*(void**)p = NULL;
 	}
+#ifdef DEBUG
+	mm_check();
+	printf("initialized\n\n");
+#endif
 
   /* DON't MODIFY THIS STAGE AND LEAVE IT AS IT WAS */
   gl_ranges = ranges;
@@ -146,20 +170,27 @@ void* mm_malloc(size_t size)
 	void* last;
 		
 	/* free list is not empty and heap size is big enough */
-	if (mem_heap_hi() - mem_heap_lo() + 1 >= newsize) {
-		for (i=SEGLIST_NUM; i>0; i--)
-			if ((newsize>>i) & 0x1) break;
-		first = GET_FIRST(i-1);
-		last = GET_LAST(i-1);
+	if (mem_heap_hi() - heap_start + 1 >= newsize) {
+		GET_INDEX(newsize, i)
+		first = GET_FIRST(i);
+		last = GET_LAST(i);
 		p = first;
-		while(p != NULL) {
+		while(i<SEGLIST_NUM) {
+			if (p == NULL) {
+				i++;
+				first = GET_FIRST(i);
+				last = GET_LAST(i);
+				p = first;
+				continue;
+			}
 			header = GET_HEADER(p);
 			headersize = GET_SIZE(header);
 			next = NEXT(p);
+			//printf("i: %d, p: %p, next: %p\n", i, p, next);
 			/* if size is big enough */
 			if (headersize >= newsize) {
 #ifdef DEBUG
-				printf("req: %d | Found a proper block of size %d at %p\n", size, headersize, p);
+				printf("req: %d | Found a proper block of size %d at %p, index: %d\n", size, headersize, p, i);
 #endif
 				/* write header */
 				GET_HEADER(p) = newsize + 0x1;
@@ -180,17 +211,25 @@ void* mm_malloc(size_t size)
 #endif
 				/* write free pointer */
 				if (diff >= MIN_SIZE) {
-					if (prev == NULL) GET_FIRST(i-1) = split;
-					else							NEXT(prev) = split;
-					if (next == NULL) GET_LAST(i-1) = split;
-					else							PREV(next) = split;
-					NEXT(split) = next;
-					PREV(split) = prev;
+					DETACH(p, i)
+
+					GET_INDEX(diff, i)
+					if (GET_LAST(i) == NULL) {
+						GET_FIRST(i) = split;
+						GET_LAST(i) = split;
+						NEXT(split) = NULL;
+						PREV(split) = NULL;
+					} else {
+						PREV(split) = GET_LAST(i);
+						NEXT(split) = NULL;
+						GET_LAST(i) = split;
+					}
 				} else {
-					DETACH(p, i-1)
+					DETACH(p, i)
 				}
 #ifdef DEBUG
-				printf("after: free_first: %p | free_last: %p | prev: %p | next: %p\n", free_first, free_last, prev, next);
+				printf("after: first: %p | last: %p | prev: %p | next: %p\n", first, last, prev, next);
+				mm_check();
 				printf("req: %d | actual: %d bytes allocated with p: %p\n\n", size, GET_SIZE(GET_HEADER(p)), p);
 #endif
 				return p + SIZE_T_SIZE;
@@ -227,13 +266,13 @@ void mm_free(void *ptr)
 	size_t header = GET_HEADER(header_ptr);
 	size_t headersize = GET_SIZE(header);
 
-	void *next_ptr = header_ptr + GET_SIZE(header);
-	size_t header_next = GET_HEADER(next_ptr);
-	size_t nextsize = GET_SIZE(header_next);
+	void *next_ptr; 
+	size_t header_next;
+	size_t nextsize;
 
-	void *prev_ptr = header_ptr - GET_SIZE(GET_HEADER(header_ptr - SIZE_T_SIZE));
-	size_t header_prev = GET_HEADER(prev_ptr);
-	size_t prevsize = GET_SIZE(header_prev);
+	void *prev_ptr;
+	size_t header_prev;
+	size_t prevsize;
 
 	int next_coal;
 	int prev_coal;
@@ -242,31 +281,42 @@ void mm_free(void *ptr)
 	void* last;
 	int i;
 
-#ifdef DEBUG
-	printf("free called with ptr: %p, header_ptr: %p, header: %d, allocated: %d\n", ptr, header_ptr, header, IS_ALLOCATED(header));
-	printf("before: free_first: %p | free_last: %p\n", free_first, free_last);
-#endif
 	if (IS_ALLOCATED(header)) {
-
+#ifdef DEBUG
+		printf("free called with header_ptr: %p, header: %d\n", header_ptr, header);
+#endif
+		/* initialize variables */
+		next_ptr = header_ptr + GET_SIZE(header);
+		prev_ptr = header_ptr - GET_SIZE(GET_HEADER(header_ptr - SIZE_T_SIZE));
 		/* check if coalescing is possible */
+		next_coal = next_ptr <= mem_heap_hi() && !IS_ALLOCATED(header_next = GET_HEADER(next_ptr));
+		prev_coal = prev_ptr >= mem_heap_lo() && !IS_ALLOCATED(header_prev = GET_HEADER(prev_ptr)); 
+		if (next_coal) {
+			nextsize = GET_SIZE(header_next);
+		}
+		if (prev_coal) {
+			prevsize = GET_SIZE(header_prev);
+		}
 
-		next_coal = next_ptr <= mem_heap_hi() && !IS_ALLOCATED(header_next);
-		prev_coal = prev_ptr >= mem_heap_lo() && !IS_ALLOCATED(header_prev); 
 		if (next_coal && prev_coal) {
 			GET_HEADER(prev_ptr) = headersize + prevsize + nextsize;
 			GET_HEADER(next_ptr + nextsize - SIZE_T_SIZE) = headersize + prevsize + nextsize;
 			header_ptr = prev_ptr;
 			
 			/* detach link */
-			for (i=SEGLIST_NUM; i>0; i--)
-				if ((prevsize>>i) & 0x1) break;
 			if (prevsize >= MIN_SIZE) {
-				DETACH(prev_ptr, i-1)
+				GET_INDEX(prevsize, i)
+				DETACH(prev_ptr, i)
+#ifdef DEBUG
+				printf("detached %p in %d\n", prev_ptr, i);
+#endif
 			}
-			for (i=SEGLIST_NUM; i>0; i--)
-				if ((nextsize>>i) & 0x1) break;
 			if (nextsize >= MIN_SIZE) {
-				DETACH(next_ptr, i-1)
+				GET_INDEX(nextsize, i)
+				DETACH(next_ptr, i)
+#ifdef DEBUG
+				printf("detached %p in %d\n", next_ptr, i);
+#endif
 			}
 		}
 		/* if next block is free */
@@ -275,10 +325,12 @@ void mm_free(void *ptr)
 			GET_HEADER(next_ptr + nextsize - SIZE_T_SIZE) = headersize + nextsize;
 			
 			/* detach link */
-			for (i=SEGLIST_NUM; i>0; i--)
-				if ((nextsize>>i) & 0x1) break;
 			if (nextsize >= MIN_SIZE) {
-				DETACH(next_ptr, i-1)
+				GET_INDEX(nextsize, i)
+				DETACH(next_ptr, i)
+#ifdef DEBUG
+				printf("detached %p in %d\n", next_ptr, i);
+#endif
 			}
 		}
 		/* if previous block is free */
@@ -288,10 +340,12 @@ void mm_free(void *ptr)
 			header_ptr = prev_ptr;
 
 			/* detach link */
-			for (i=SEGLIST_NUM; i>0; i--)
-				if ((prevsize>>i) & 0x1) break;
 			if (prevsize >= MIN_SIZE) {
-				DETACH(prev_ptr, i-1)
+				GET_INDEX(prevsize, i)
+				DETACH(prev_ptr, i)
+#ifdef DEBUG
+				printf("detached %p in %d\n", prev_ptr, i);
+#endif
 			}
 		}
 		/* no other blocks are free */
@@ -299,24 +353,24 @@ void mm_free(void *ptr)
 			GET_HEADER(header_ptr) -= 0x1;
 			GET_HEADER(next_ptr - SIZE_T_SIZE) -= 0x1;
 		}
-		for (i=SEGLIST_NUM; i>0; i--)
-			if ((GET_SIZE(GET_HEADER(header_ptr))>>i) & 0x1) break;
-		first = GET_FIRST(i-1);
-		last = GET_LAST(i-1);
+		GET_INDEX(GET_SIZE(GET_HEADER(header_ptr)), i)
+		first = GET_FIRST(i);
+		last = GET_LAST(i);
 
 		/* write free pointer */
 		if (last == NULL) {
-			GET_FIRST(i-1) = header_ptr;
-			GET_LAST(i-1) = header_ptr;
+			GET_FIRST(i) = header_ptr;
+			GET_LAST(i) = header_ptr;
 			NEXT(header_ptr) = NULL;
 			PREV(header_ptr) = NULL;
 		} else {
 			PREV(header_ptr) = last;
 			NEXT(header_ptr) = NULL;
-			GET_LAST(i-1) = header_ptr;
+			GET_LAST(i) = header_ptr;
 		}
 #ifdef DEBUG
-		printf("after: free_first: %p | free_last: %p\n", free_first, free_last);
+		printf("attached %p in %d (first: %p | last: %p)\n", header_ptr, i, GET_FIRST(i), GET_LAST(i));
+		mm_check();
 		printf("%d bytes freed with ptr: %p\n\n", GET_SIZE(GET_HEADER(header_ptr)), header_ptr);
 #endif
 	}
@@ -345,11 +399,14 @@ void* mm_realloc(void *ptr, size_t t)
  */
 void mm_exit(void)
 {
+	void* p;
 #ifdef DEBUG
 	printf("exit\n");
+	mm_check();
+	printf("heap_start: %p, mem_heap_hi: %p\n", heap_start, mem_heap_hi());
 #endif
-	void* p;
-	for(p=mem_heap_lo(); p<=mem_heap_hi(); p+=GET_SIZE(*(size_t*)p))
+	for(p=heap_start; p<=mem_heap_hi(); p+=GET_SIZE(*(size_t*)p)){
+		printf("p: %p\n", p);
 		mm_free(p+SIZE_T_SIZE);
+	}
 }
-
