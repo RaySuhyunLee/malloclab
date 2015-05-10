@@ -47,6 +47,10 @@ static range_t **gl_ranges;
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
+
+/* my implementations */
+static void* cursor;
+
 #define IS_ALLOCATED(header) ((header)&0x1)
 #define GET_SIZE(header) ((header) & ~0x7)
 
@@ -80,6 +84,7 @@ static void remove_range(range_t **ranges, char *lo)
 int mm_init(range_t **ranges)
 {
   /* YOUR IMPLEMENTATION */
+	cursor = NULL;
 
   /* DON't MODIFY THIS STAGE AND LEAVE IT AS IT WAS */
   gl_ranges = ranges;
@@ -94,10 +99,15 @@ int mm_init(range_t **ranges)
 void* mm_malloc(size_t size)
 {
   int newsize = ALIGN(size + SIZE_T_SIZE);
-	void* p = mem_heap_lo();
+	void* p;
 	size_t header;
 	size_t oldsize;
 	int diff;
+
+	// next fit
+	if (cursor != NULL) p = cursor;
+	else								p = mem_heap_lo();
+
 	if (mem_heap_hi() - mem_heap_lo() + 1 >= newsize) {
 		while(p < mem_heap_hi()) {
 			header = *(size_t*)p;
@@ -112,6 +122,7 @@ void* mm_malloc(size_t size)
 #ifdef DEBUG
 				printf("%d bytes allocated with p: %p\n", GET_SIZE(*(size_t*)p), p);
 #endif
+				cursor = p;
 				return p + SIZE_T_SIZE;
 			}
 			else
@@ -129,6 +140,7 @@ void* mm_malloc(size_t size)
 #ifdef DEBUG
 		printf("%d bytes allocated with sbrk with p: %p\n", GET_SIZE(*(size_t*)p), p);
 #endif
+		cursor = p;
     return (void *)((char *)p + SIZE_T_SIZE);
   }
 }
@@ -139,13 +151,12 @@ void* mm_malloc(size_t size)
 void mm_free(void *ptr)
 {
 	void *header_ptr = ptr - SIZE_T_SIZE;
-  /* YOUR IMPLEMENTATION */
 	size_t header = *(size_t*)header_ptr;
 	if (IS_ALLOCATED(header))
 		*(size_t*)header_ptr -= 0x1;
 	else {
 #ifdef DEBUG
-		printf("already freed\n");
+		printf("already freed at ptr: %p\n", header_ptr);
 #endif
 		return;
 	}
