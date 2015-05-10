@@ -51,6 +51,7 @@ static range_t **gl_ranges;
 /* my implementations */
 static void* cursor;
 
+#define GET_HEADER(ptr) (*(size_t*)(ptr))
 #define IS_ALLOCATED(header) ((header)&0x1)
 #define GET_SIZE(header) ((header) & ~0x7)
 
@@ -102,7 +103,7 @@ void* mm_malloc(size_t size)
 	void* p;
 	void* next;
 	size_t header;
-	size_t oldsize;
+	size_t headersize;
 	int diff;
 
 	// next fit
@@ -111,20 +112,21 @@ void* mm_malloc(size_t size)
 
 	if (mem_heap_hi() - mem_heap_lo() + 1 >= newsize) {
 		while(p < mem_heap_hi()) {
-			header = *(size_t*)p;
-			if (IS_ALLOCATED(header))
-				p += GET_SIZE(header);
-			else if ((oldsize = GET_SIZE(header)) >= newsize) {
-				*(size_t*)p = newsize + 0x1;
-				*(size_t*)(p+newsize - SIZE_T_SIZE) = newsize + 0x1;
+			header = GET_HEADER(p);
+			headersize = GET_SIZE(header);
+			if (IS_ALLOCATED(header)) {
+				p += headersize;
+			}	else if (headersize >= newsize) {
+				GET_HEADER(p) = newsize + 0x1;
+				GET_HEADER(p+newsize - SIZE_T_SIZE) = newsize + 0x1;
 				// split blocks
-				if ((diff = oldsize - newsize) > 0) {
+				if ((diff = headersize - newsize) > 0) {
 					next = p + newsize;
-					*(size_t*)next = diff;
-					*(size_t*)(next + diff - SIZE_T_SIZE) = diff;
+					GET_HEADER(next) = diff;
+					GET_HEADER(next + diff - SIZE_T_SIZE) = diff;
 				}
 #ifdef DEBUG
-				printf("%d bytes allocated with p: %p\n", GET_SIZE(*(size_t*)p), p);
+				printf("%d bytes allocated with p: %p\n", GET_SIZE(GET_HEADER(p)), p);
 #endif
 				cursor = p;
 				return p + SIZE_T_SIZE;
@@ -140,10 +142,10 @@ void* mm_malloc(size_t size)
   if (p == (void *)-1)
     return NULL;
   else {
-    *(size_t *)p = newsize + 0x1;
-		*(size_t*)(p + newsize - SIZE_T_SIZE) = newsize + 0x1;
+    GET_HEADER(p) = newsize + 0x1;
+		GET_HEADER(p + newsize - SIZE_T_SIZE) = newsize + 0x1;
 #ifdef DEBUG
-		printf("%d bytes allocated with sbrk with p: %p\n", GET_SIZE(*(size_t*)p), p);
+		printf("%d bytes allocated with sbrk with p: %p\n", GET_SIZE(GET_HEADER(p)), p);
 #endif
 		cursor = p;
     return p + SIZE_T_SIZE;
@@ -156,28 +158,34 @@ void* mm_malloc(size_t size)
 void mm_free(void *ptr)
 {
 	void *header_ptr = ptr - SIZE_T_SIZE;
-	size_t header = *(size_t*)header_ptr;
+	size_t header = GET_HEADER(header_ptr);
+	size_t headersize = GET_SIZE(header);
+
 	void *next_ptr = header_ptr + GET_SIZE(header);
-	size_t header_next = *(size_t*)next_ptr;
-	void *prev_ptr = header_ptr - GET_SIZE(*(size_t*)(header_ptr - SIZE_T_SIZE));
-	size_t header_prev = *(size_t*)prev_ptr;
+	size_t header_next = GET_HEADER(next_ptr);
+	size_t nextsize = GET_SIZE(header_next);
+
+	void *prev_ptr = header_ptr - GET_SIZE(GET_HEADER(header_ptr - SIZE_T_SIZE));
+	size_t header_prev = GET_HEADER(prev_ptr);
+	size_t prevsize = GET_SIZE(header_prev);
+
 	if (IS_ALLOCATED(header)) {
-		// check if coalescing is available
+		// check if coalescing is possible
 		if (next_ptr <= mem_heap_hi() && !IS_ALLOCATED(header_next)) {
-			*(size_t*)header_ptr = GET_SIZE(header) + GET_SIZE(header_next);
-			*(size_t*)(next_ptr + GET_SIZE(header_next) - SIZE_T_SIZE) = GET_SIZE(header) + GET_SIZE(header_next);
+			GET_HEADER(header_ptr) = GET_SIZE(header) + GET_SIZE(header_next);
+			GET_HEADER(next_ptr + nextsize - SIZE_T_SIZE) = headersize + nextsize;
 			cursor = header_ptr;
 		} else if (prev_ptr >= mem_heap_lo() && !IS_ALLOCATED(header_prev)) {
-			*(size_t*)prev_ptr = GET_SIZE(header) + GET_SIZE(header_prev);
-			*(size_t*)(next_ptr - SIZE_T_SIZE) = GET_SIZE(header) + GET_SIZE(header_prev);
+			GET_HEADER(prev_ptr) = headersize + prevsize;
+			GET_HEADER(next_ptr - SIZE_T_SIZE) = headersize + prevsize;
 			cursor = prev_ptr;
 		} else {
-			*(size_t*)header_ptr -= 0x1;
-			*(size_t*)(next_ptr - SIZE_T_SIZE) -= 0x1;
+			GET_HEADER(header_ptr) -= 0x1;
+			GET_HEADER(next_ptr - SIZE_T_SIZE) -= 0x1;
 			cursor = header_ptr;
 		}
 #ifdef DEBUG
-		printf("%d bytes freed with ptr: %p\n", GET_SIZE(*(size_t*)header_ptr), header_ptr);
+		printf("%d bytes freed with ptr: %p\n", headersize, header_ptr);
 #endif
 	}
 	else {
