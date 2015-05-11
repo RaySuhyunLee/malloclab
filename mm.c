@@ -1,13 +1,24 @@
 /*
- * mm-naive.c - The fastest, least memory-efficient malloc package.
+ * mm.c - A powerful dynamic allocation gwajae made by Suhyun Lee
  *
- * In this naive approach, a block is allocated by simply incrementing
- * the brk pointer.  A block is pure payload. There are no headers or
- * footers.  Blocks are never coalesced or reused. Realloc is
- * implemented directly using mm_malloc and mm_free.
+ * In this implementation, I used segregated free list to get both
+ * efficient memory usage and high throughput.
+ * Every block contains header, footer, and space for pointers to
+ * other free blocks.
+ * Below is list of features supported in and charactoristics of this implementation:
+ * - Split
+ * - Two way coalescing
+ * - Explicit free list
+ * - Segregated free lists
  *
- * NOTE TO STUDENTS: Replace this header comment with your own header
- * comment that gives a high level description of your solution.
+ * block structure
+ * ==========
+ * | header |
+ * | next   |
+ * | prev   |
+ * | ...    |
+ * | footer |
+ * ==========
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,6 +93,7 @@ static range_t **gl_ranges;
 static void* heap_start;
 
 //#define DEBUG
+#define CHECK
 
 /* 
  * remove_range - manipulate range lists
@@ -106,13 +118,76 @@ static void remove_range(range_t **ranges, char *lo)
 }
 
 /*
- * mm_check
+ * mm_check_non_free() detects non-free blocks in the free list
+ */
+int mm_check_non_free(void) {
+	void* p;
+	int i, cnt, total;
+
+	printf("[Non-free block detection]\n");
+	total = 0;
+	for(i=0; i<SEGLIST_NUM; i++) {
+		cnt = 0;
+		p = GET_FIRST(i);
+		while(p != NULL) {
+			if (IS_ALLOCATED(GET_HEADER(p))) {
+				cnt++;
+				total++;
+			}
+			p = NEXT(p);
+		}
+		if (cnt!=0)		printf("seglist[%d]: %d\n", i, cnt);
+	}
+	if(total == 0)	printf("Test passed\n");
+	else						printf("Test failed with %d non-free blocks in the seglist\n", total);
+	return (total == 0)? 1 : 0;
+}
+
+/*
+ * mm_check_non_coal() detects non-coalesced free blocks
+ */
+int mm_check_non_coal(void) {
+	void* p = heap_start;
+	size_t header;
+	void* next;
+	int cnt = 0;
+	printf("[Non-coalesced free block detection]\n");
+	while(p <= mem_heap_hi()) {
+		header = GET_HEADER(p);
+		next = p + GET_SIZE(header);
+		if (next <= mem_heap_hi() &&
+				!IS_ALLOCATED(header) && !IS_ALLOCATED(GET_HEADER(next)))
+			cnt++;
+		p = next;
+	}
+	if (cnt == 0)	printf("Test passed\n");
+	else					printf("Test failed with %d non-coalesced free block(s)\n", cnt);
+	return (cnt == 0)? 1 : 0;
+}
+
+/*
+ * mm_check checks things written below:
+ * 1. Detects non-free blocks in free list
+ * 2. Detects free blocks that are not coalesced
  */
 void mm_check(void) {
+	int total = 0;
+	printf("========== HEAP CONSISTENCY CHECK ==========\n");
+	total += mm_check_non_free();
+	total += mm_check_non_coal();
+	printf("%d tests passed\n", total);
+	printf("\n");
+}
+
+
+void mm_show(void) {
 	void** p;
 	int i=0;
+	printf("========== Current Status ==========\n");
+	printf(" memory size: %d bytes\n", mem_heapsize());
+	printf(" seglist info: \n");
 	for(p=mem_heap_lo(); p<(void**)mem_heap_lo()+ALIGN(SEGLIST_NUM); p++, i++)
-		printf("[%d: %p] ", i, *p);
+		printf("[%d(%d < size <= %d)] start: %p\n", i, 1<<i, 1<<(i+1), *p);
 	printf("\n");
 }
 
@@ -132,8 +207,11 @@ int mm_init(range_t **ranges)
 		for (; p<=mem_heap_hi(); p++)
 			*(void**)p = NULL;
 	}
-#ifdef DEBUG
+#ifdef CHECK
 	mm_check();
+#endif
+#ifdef DEBUG
+	mm_show();
 	printf("initialized\n\n");
 #endif
 
@@ -164,7 +242,6 @@ void* mm_malloc(size_t size)
 	
 #ifdef DEBUG
 	printf("malloc called with req: %d\n", size);
-	//if (size == 26940) exit(0);
 #endif
 	/* free list is not empty and heap size is big enough */
 	if (mem_heap_hi() - heap_start + 1 >= newsize) {
@@ -203,9 +280,6 @@ void* mm_malloc(size_t size)
 					GET_HEADER(split) = diff;
 					GET_HEADER(split + diff - SIZE_T_SIZE) = diff;
 				}
-#ifdef DEBUG
-				//printf("before: first: %p | prev: %p | next: %p\n", first, prev, next);
-#endif
 				/* write free pointer */
 				if (diff >= MIN_SIZE) {
 #ifdef DEBUG
@@ -233,9 +307,11 @@ void* mm_malloc(size_t size)
 				} else {
 					DETACH(p, i)
 				}
-#ifdef DEBUG
-				//printf("after: first: %p | prev: %p | next: %p\n", GET_FIRST(i), prev, next);
+#ifdef CHECK
 				mm_check();
+#endif
+#ifdef DEBUG
+				mm_show();
 				printf("req: %d | actual: %d bytes allocated with p: %p\n\n", size, GET_SIZE(GET_HEADER(p)), p);
 #endif
 				return p + SIZE_T_SIZE;
@@ -259,7 +335,11 @@ void* mm_malloc(size_t size)
 		GET_HEADER(p) = newsize + 0x1;
 		GET_HEADER(p + newsize - SIZE_T_SIZE) = newsize + 0x1;
 
+#ifdef CHECK
+		mm_check();
+#endif
 #ifdef DEBUG
+		mm_show();
 		printf("req: %d | actual: %d bytes allocated with sbrk with p: %p\n\n", size, GET_SIZE(GET_HEADER(p)), p);
 #endif
 		return p + SIZE_T_SIZE;
@@ -383,7 +463,12 @@ void mm_free(void *ptr)
 		}
 #ifdef DEBUG
 		printf("attached %p in %d (first: %p)\n", header_ptr, i, GET_FIRST(i));
+#endif
+#ifdef CHECK
 		mm_check();
+#endif
+#ifdef DEBUG
+		mm_show();
 		printf("%d bytes freed with ptr: %p\n\n", GET_SIZE(GET_HEADER(header_ptr)), header_ptr);
 #endif
 	}
@@ -413,13 +498,14 @@ void* mm_realloc(void *ptr, size_t t)
 void mm_exit(void)
 {
 	void* p;
+#ifdef CHECK
+	mm_check();
+#endif
 #ifdef DEBUG
 	printf("exit\n");
-	mm_check();
 	printf("heap_start: %p, mem_heap_hi: %p\n", heap_start, mem_heap_hi());
 #endif
 	for(p=heap_start; p<=mem_heap_hi(); p+=GET_SIZE(*(size_t*)p)){
-		printf("p: %p\n", p);
 		mm_free(p+SIZE_T_SIZE);
 	}
 }
