@@ -81,7 +81,7 @@ static range_t **gl_ranges;
 
 static void* heap_start;
 
-#define DEBUG
+//#define DEBUG
 
 /* 
  * remove_range - manipulate range lists
@@ -161,7 +161,11 @@ void* mm_malloc(size_t size)
 	int i;
 
 	void* first;
-		
+	
+#ifdef DEBUG
+	printf("malloc called with req: %d\n", size);
+	//if (size == 26940) exit(0);
+#endif
 	/* free list is not empty and heap size is big enough */
 	if (mem_heap_hi() - heap_start + 1 >= newsize) {
 		GET_INDEX(newsize, i)
@@ -177,7 +181,9 @@ void* mm_malloc(size_t size)
 			header = GET_HEADER(p);
 			headersize = GET_SIZE(header);
 			next = NEXT(p);
-			//printf("i: %d, p: %p, next: %p\n", i, p, next);
+#ifdef DEBUG
+			printf("i: %d, p: %p, next: %p\n", i, p, next);
+#endif
 			/* if size is big enough */
 			if (headersize >= newsize) {
 #ifdef DEBUG
@@ -198,11 +204,17 @@ void* mm_malloc(size_t size)
 					GET_HEADER(split + diff - SIZE_T_SIZE) = diff;
 				}
 #ifdef DEBUG
-				printf("before: first: %p | prev: %p | next: %p\n", first, prev, next);
+				//printf("before: first: %p | prev: %p | next: %p\n", first, prev, next);
 #endif
 				/* write free pointer */
 				if (diff >= MIN_SIZE) {
+#ifdef DEBUG
+					printf("detach: curr: %p, prev: %p, next: %p\n", p, PREV(p), NEXT(p));
+#endif
 					DETACH(p, i)
+#ifdef DEBUG
+					printf("detached %p from index:%d\n", p, i);
+#endif
 
 					GET_INDEX(diff, i)
 					if (GET_FIRST(i) == NULL) {
@@ -211,24 +223,31 @@ void* mm_malloc(size_t size)
 						PREV(split) = NULL;
 					} else {
 						NEXT(split) = GET_FIRST(i);
-						GET_FIRST(i) = split;
 						PREV(split) = NULL;
+						PREV(GET_FIRST(i)) = split;
+						GET_FIRST(i) = split;
 					}
+#ifdef DEBUG
+					printf("attached %p in index:%d\n", split, i);
+#endif
 				} else {
 					DETACH(p, i)
 				}
 #ifdef DEBUG
-				printf("after: first: %p | prev: %p | next: %p\n", first, prev, next);
+				//printf("after: first: %p | prev: %p | next: %p\n", GET_FIRST(i), prev, next);
 				mm_check();
 				printf("req: %d | actual: %d bytes allocated with p: %p\n\n", size, GET_SIZE(GET_HEADER(p)), p);
 #endif
 				return p + SIZE_T_SIZE;
 			}
 			/* if size is not big enough */
-			else { 
+			else {
 				p = next;
 			}
 		}
+#ifdef DEBUG
+		printf("Could not find a proper block\n");
+#endif
 	}  
 
 	/* if there isn't enough space */
@@ -253,8 +272,8 @@ void* mm_malloc(size_t size)
 void mm_free(void *ptr)
 {
 	void *header_ptr = ptr - SIZE_T_SIZE;
-	size_t header = GET_HEADER(header_ptr);
-	size_t headersize = GET_SIZE(header);
+	size_t header;
+	size_t headersize;
 
 	void *next_ptr; 
 	size_t header_next;
@@ -270,22 +289,25 @@ void mm_free(void *ptr)
 	void* first;
 	int i;
 
+	if (header_ptr < heap_start || header_ptr > mem_heap_hi()) {
+		printf("free: Invalid address!\n");
+		exit(1);
+	}
+	header = GET_HEADER(header_ptr);
+	headersize = GET_SIZE(header);
 	if (IS_ALLOCATED(header)) {
 #ifdef DEBUG
 		printf("free called with header_ptr: %p, header: %d\n", header_ptr, header);
 #endif
 		/* initialize variables */
 		next_ptr = header_ptr + GET_SIZE(header);
-		prev_ptr = header_ptr - GET_SIZE(GET_HEADER(header_ptr - SIZE_T_SIZE));
+		prev_ptr = header_ptr > heap_start?
+			header_ptr - GET_SIZE(GET_HEADER(header_ptr - SIZE_T_SIZE)) : 0;
 		/* check if coalescing is possible */
 		next_coal = next_ptr <= mem_heap_hi() && !IS_ALLOCATED(header_next = GET_HEADER(next_ptr));
-		prev_coal = prev_ptr >= mem_heap_lo() && !IS_ALLOCATED(header_prev = GET_HEADER(prev_ptr)); 
-		if (next_coal) {
-			nextsize = GET_SIZE(header_next);
-		}
-		if (prev_coal) {
-			prevsize = GET_SIZE(header_prev);
-		}
+		prev_coal = prev_ptr >= heap_start && !IS_ALLOCATED(header_prev = GET_HEADER(prev_ptr));
+		nextsize = next_coal? GET_SIZE(header_next) : 0;
+		prevsize = prev_coal? GET_SIZE(header_prev) : 0;
 
 		if (next_coal && prev_coal) {
 			GET_HEADER(prev_ptr) = headersize + prevsize + nextsize;
@@ -297,14 +319,14 @@ void mm_free(void *ptr)
 				GET_INDEX(prevsize, i)
 				DETACH(prev_ptr, i)
 #ifdef DEBUG
-				printf("detached %p in %d\n", prev_ptr, i);
+				printf("coalescing with prev: detached %p in %d\n", prev_ptr, i);
 #endif
 			}
 			if (nextsize >= MIN_SIZE) {
 				GET_INDEX(nextsize, i)
 				DETACH(next_ptr, i)
 #ifdef DEBUG
-				printf("detached %p in %d\n", next_ptr, i);
+				printf("coalescing with next: detached %p in %d\n", next_ptr, i);
 #endif
 			}
 		}
@@ -318,7 +340,7 @@ void mm_free(void *ptr)
 				GET_INDEX(nextsize, i)
 				DETACH(next_ptr, i)
 #ifdef DEBUG
-				printf("detached %p in %d\n", next_ptr, i);
+				printf("coalescing with next: detached %p in %d\n", next_ptr, i);
 #endif
 			}
 		}
@@ -333,7 +355,7 @@ void mm_free(void *ptr)
 				GET_INDEX(prevsize, i)
 				DETACH(prev_ptr, i)
 #ifdef DEBUG
-				printf("detached %p in %d\n", prev_ptr, i);
+				printf("coalescing with prev: detached %p in %d\n", prev_ptr, i);
 #endif
 			}
 		}
@@ -341,6 +363,9 @@ void mm_free(void *ptr)
 		else {
 			GET_HEADER(header_ptr) -= 0x1;
 			GET_HEADER(next_ptr - SIZE_T_SIZE) -= 0x1;
+#ifdef DEBUG
+			printf("no coalescing\n");
+#endif
 		}
 		GET_INDEX(GET_SIZE(GET_HEADER(header_ptr)), i)
 		first = GET_FIRST(i);
@@ -353,6 +378,7 @@ void mm_free(void *ptr)
 		} else {
 			NEXT(header_ptr) = GET_FIRST(i);
 			PREV(header_ptr) = NULL;
+			PREV(GET_FIRST(i)) = header_ptr;
 			GET_FIRST(i) = header_ptr;
 		}
 #ifdef DEBUG
