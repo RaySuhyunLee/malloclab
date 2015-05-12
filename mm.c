@@ -242,9 +242,8 @@ void* mm_malloc(size_t size)
   int newsize = ALIGN(size) > (ALIGNMENT<<1)?
 		ALIGN(size) + (SIZE_T_SIZE<<1) : (ALIGNMENT<<1) + (SIZE_T_SIZE<<1);
 	void* p;
-	void* split;
+	void* split = NULL;
 	void* next;
-	void* prev;
 	size_t header;
 	size_t headersize;
 	int diff;
@@ -281,7 +280,6 @@ void* mm_malloc(size_t size)
 				/* write header */
 				GET_HEADER(p) = newsize + 0x1;
 				GET_HEADER(p+newsize - SIZE_T_SIZE) = newsize + 0x1;
-				prev = PREV(p);
 				/* split blocks */
 				if ((diff = headersize - newsize) > 0) {
 					split = p + newsize;
@@ -293,7 +291,7 @@ void* mm_malloc(size_t size)
 					GET_HEADER(split + diff - SIZE_T_SIZE) = diff;
 				}
 				/* write free pointer */
-				if (diff >= MIN_SIZE) {
+				if (diff >= MIN_SIZE && split != NULL) {
 #ifdef DEBUG
 					printf("detach: curr: %p, prev: %p, next: %p\n", p, PREV(p), NEXT(p));
 #endif
