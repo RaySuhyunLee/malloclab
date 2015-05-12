@@ -81,6 +81,18 @@ static range_t **gl_ranges;
 /* for segregated list */
 #define SEGLIST_NUM 16
 #define GET_FIRST(index) (*((void**)mem_heap_lo() + (index)))
+#define ATTACH(ptr, index) \
+	if (GET_FIRST(index) == NULL) { \
+		GET_FIRST(index) = (ptr);	\
+		NEXT(ptr) = NULL;	\
+		PREV(ptr) = NULL; \
+	} else { \
+		NEXT(ptr) = GET_FIRST(index); \
+		PREV(ptr) = NULL; \
+		PREV(GET_FIRST(index)) = (ptr); \
+		GET_FIRST(i) = (ptr); \
+	}
+
 #define DETACH(ptr, index) \
 	if (PREV(ptr) == NULL) GET_FIRST(index) = NEXT(ptr);	/* if this is the first free block */ \
 	else									NEXT(PREV(ptr)) = NEXT(ptr); \
@@ -93,7 +105,7 @@ static range_t **gl_ranges;
 static void* heap_start;
 
 //#define DEBUG
-#define CHECK
+//#define CHECK
 
 /* 
  * remove_range - manipulate range lists
@@ -291,16 +303,7 @@ void* mm_malloc(size_t size)
 #endif
 
 					GET_INDEX(diff, i)
-					if (GET_FIRST(i) == NULL) {
-						GET_FIRST(i) = split;
-						NEXT(split) = NULL;
-						PREV(split) = NULL;
-					} else {
-						NEXT(split) = GET_FIRST(i);
-						PREV(split) = NULL;
-						PREV(GET_FIRST(i)) = split;
-						GET_FIRST(i) = split;
-					}
+					ATTACH(split, i)
 #ifdef DEBUG
 					printf("attached %p in index:%d\n", split, i);
 #endif
@@ -366,7 +369,6 @@ void mm_free(void *ptr)
 	int next_coal;
 	int prev_coal;
 
-	void* first;
 	int i;
 
 	if (header_ptr < heap_start || header_ptr > mem_heap_hi()) {
@@ -448,19 +450,8 @@ void mm_free(void *ptr)
 #endif
 		}
 		GET_INDEX(GET_SIZE(GET_HEADER(header_ptr)), i)
-		first = GET_FIRST(i);
-
-		/* write free pointer */
-		if (first == NULL) {
-			GET_FIRST(i) = header_ptr;
-			NEXT(header_ptr) = NULL;
-			PREV(header_ptr) = NULL;
-		} else {
-			NEXT(header_ptr) = GET_FIRST(i);
-			PREV(header_ptr) = NULL;
-			PREV(GET_FIRST(i)) = header_ptr;
-			GET_FIRST(i) = header_ptr;
-		}
+		ATTACH(header_ptr, i)
+		
 #ifdef DEBUG
 		printf("attached %p in %d (first: %p)\n", header_ptr, i, GET_FIRST(i));
 #endif
