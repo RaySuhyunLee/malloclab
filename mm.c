@@ -61,26 +61,46 @@ static range_t **gl_ranges;
 
 /* my implementations */
 
-/* block structure */
-/* ========== */
-/* | header | */
-/* | next   | */
-/* | prev   | */
-/* | ...    | */
-/* | footer | */
-/* ========== */
+/*
+ * block structure(name: size) 
+ * |============================|
+ * | header: ALIGN(SIZE_T_SIZE) |
+ * | next: ALIGNMENT            |
+ * | prev: ALIGNMENT            |
+ * | ...                        |
+ * | footer: ALIGN(SIZE_T_SIZE) |
+ * |============================|
+ */
+/* minimum size of a block ((next+prev) + (header+footer) */
 #define MIN_SIZE ((ALIGNMENT<<1) + (SIZE_T_SIZE<<1))
-#define PREV_OFFSET SIZE_T_SIZE
-#define NEXT_OFFSET (SIZE_T_SIZE + ALIGNMENT)
+/* get the header from the pointer */
 #define GET_HEADER(ptr) (*(size_t*)(ptr))
-#define PREV(ptr) (*(void**)((ptr) + PREV_OFFSET))
-#define NEXT(ptr) (*(void**)((ptr) + NEXT_OFFSET))
-#define IS_ALLOCATED(header) ((header)&0x1)
+/* get the size of the block */
 #define GET_SIZE(header) ((header) & ~0x7)
+/* check if the block is allocated */
+#define IS_ALLOCATED(header) ((header)&0x1)
 
-/* for segregated list */
+
+/* for explicit linked list */
+
+/* offset from the block pointer to prev(free block) pointer */
+#define PREV_OFFSET SIZE_T_SIZE
+/* offset from the block pointer to next(free block) pointer */
+#define NEXT_OFFSET (SIZE_T_SIZE + ALIGNMENT)
+/* gets the pointer that points to the previous free block */
+#define PREV(ptr) (*(void**)((ptr) + PREV_OFFSET))
+/* gets the pointer that points to the next free block */
+#define NEXT(ptr) (*(void**)((ptr) + NEXT_OFFSET))
+
+
+
+/* For segregated list */
+
+/* number of free lists */
 #define SEGLIST_NUM 16
+/* returns the pointer to the free list with given index */
 #define GET_FIRST(index) (*((void**)mem_heap_lo() + (index)))
+/* macro for attaching(pushing) a free block to the list with given index */
 #define ATTACH(ptr, index) \
 	if (GET_FIRST(index) == NULL) { \
 		GET_FIRST(index) = (ptr);	\
@@ -93,10 +113,16 @@ static range_t **gl_ranges;
 		GET_FIRST(i) = (ptr); \
 	}
 
+/* macro for detaching(poping) a free block from the list with given index */
 #define DETACH(ptr, index) \
 	if (PREV(ptr) == NULL) GET_FIRST(index) = NEXT(ptr);	/* if this is the first free block */ \
 	else									NEXT(PREV(ptr)) = NEXT(ptr); \
 	if (NEXT(ptr) != NULL) PREV(NEXT(ptr)) = PREV(ptr);
+/* 
+ * macro that get the index of the list which contains blocks with the given size.
+ * For example, the list with index=0 contains blocks whose size is: 2^0<size<=2^1.
+ * The index will be stored at var.
+ */
 #define GET_INDEX(size, var) \
 		for ((var)=0; (var)<SEGLIST_NUM-1; (var)++) \
 			if ((0x1<<(var)) < (size) && (0x1<<((var)+1)) >= (size)) break;
@@ -205,6 +231,9 @@ void mm_show(void) {
 
 /*
  * mm_init - initialize the malloc package.
+ * Allocates blocks for segregated list start pointers.
+ * `heap_start` is the virtual start address that
+ * user's blocks are allocated.
  */
 int mm_init(range_t **ranges)
 {
@@ -216,6 +245,7 @@ int mm_init(range_t **ranges)
 		return 0;
 	else {
 		heap_start = mem_heap_hi() + 1;
+		/* initialize to NULL */
 		for (; p<=mem_heap_hi(); p++)
 			*(void**)p = NULL;
 	}
@@ -234,13 +264,19 @@ int mm_init(range_t **ranges)
 }
 
 /*
- * mm_malloc - Allocate a block by searching for a free block or incrementing the brk pointer.
- *     Always allocate a block whose size is a multiple of the alignment.
+ * mm_malloc - Allocate a block by searching for a free block
+ * or incrementing the brk pointer.
+ * Always allocate a block whose size is a multiple of the alignment.
+ * Since it needs space to store prev and next pointer when in free state,
+ * The minimum size of one block is ALIGNMENT*2 + SIZE_T_SIZE*2 (pointers + header/footer)
+ * When spliting the block, the original block is detached and new free block is attached in
+ * the proper list according to it's new size. Attaching may not occur
+ * if new block is smaller than minimum block size.
  */
 void* mm_malloc(size_t size)
 {
   int newsize = ALIGN(size) > (ALIGNMENT<<1)?
-		ALIGN(size) + (SIZE_T_SIZE<<1) : (ALIGNMENT<<1) + (SIZE_T_SIZE<<1);
+		ALIGN(size) + (SIZE_T_SIZE<<1) : MIN_SIZE;
 	void* p;
 	void* split = NULL;
 	void* next;
@@ -348,7 +384,11 @@ void* mm_malloc(size_t size)
 }
 	
 /*
- * mm_free - Freeing a block does nothing.
+ * mm_free - Frees the block and attach it to the free list that corresponds to the block size.
+ * Doubly linked list is used to contain the free blocks, and it follows LIFO policy.
+ * When there are any contiguous free blocks, it detaches them from the list and coalesce,
+ * and then attach the merged block to a proper list.
+ * It simply does nothing when ptr points to a already freed block.
  */
 void mm_free(void *ptr)
 {
@@ -483,6 +523,7 @@ void* mm_realloc(void *ptr, size_t t)
 
 /*
  * mm_exit - finalize the malloc package.
+ * Check if there is any un-freed block, and free it if exists.
  */
 void mm_exit(void)
 {
