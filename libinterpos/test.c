@@ -14,4 +14,5 @@ int main(void) {
 
 	free(p1);
 	free(p2);
+	return 0;
 }
