@@ -12,7 +12,11 @@ int main(void) {
 	printf("p1[0]: %d\n", p1[0]);
 	printf("p2[0]: %d\n", p2[0]);
 
-	free(p1);
+	p1 = malloc(30);
+	p2 = malloc(40);
+
+	//free(p1);
+	free(p2);
 	free(p2);
 	return 0;
 }
